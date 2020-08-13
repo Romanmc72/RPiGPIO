@@ -122,5 +122,5 @@ if __name__ == "__main__":
         16
     ]
     buzzer = TonalBuzzer(pins[0])
-    buttons = [Button(pin, pull_up=False) for pin in pins]
+    buttons = [Button(pin, pull_up=False) for pin in pins[1::]]
     play_me(my_buzzer=buzzer, my_buttons=buttons)
