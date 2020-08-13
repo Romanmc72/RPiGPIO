@@ -16,7 +16,7 @@ Therefore we need at least a resistance of...
 ```
 660Ω
 ```
-My tests utilized resistors with 1kΩ or 1000Ω, which kept the Raspberry Pi safe. Here is the [link](https://www.amazon.com/EL-CK-002-Electronic-Breadboard-Capacitor-Potentiometer/dp/B01ERP6WL4/ref=sr_1_1_sspa?crid=RC880RRMAQEU&dchild=1&keywords=rexqualis+electronics+component+fun+kit&qid=1597189328&sprefix=rex+quails+%2Caps%2C163&sr=8-1-spons&psc=1&spLa=ZW5jcnlwdGVkUXVhbGlmaWVyPUE0UENKNTc1TkFPNksmZW5jcnlwdGVkSWQ9QTAyNDU1MjAyNlk4TkY2VkdYTjk5JmVuY3J5cHRlZEFkSWQ9QTA4MzkzNjNHVjQ2SjRaVkFDVDkmd2lkZ2V0TmFtZT1zcF9hdGYmYWN0aW9uPWNsaWNrUmVkaXJlY3QmZG9Ob3RMb2dDbGljaz10cnVl) to the kit I used. Pretty cheap @ <$15!
+My tests utilized resistors with 1kΩ or 1000Ω, which kept the Raspberry Pi safe. Here is the [link](https://www.amazon.com/EL-CK-002-Electronic-Breadboard-Capacitor-Potentiometer/dp/B01ERP6WL4/ref=sr_1_1_sspa?crid=RC880RRMAQEU&dchild=1&keywords=rexqualis+electronics+component+fun+kit&qid=1597189328&sprefix=rex+quails+%2Caps%2C163&sr=8-1-spons&psc=1&spLa=ZW5jcnlwdGVkUXVhbGlmaWVyPUE0UENKNTc1TkFPNksmZW5jcnlwdGVkSWQ9QTAyNDU1MjAyNlk4TkY2VkdYTjk5JmVuY3J5cHRlZEFkSWQ9QTA4MzkzNjNHVjQ2SjRaVkFDVDkmd2lkZ2V0TmFtZT1zcF9hdGYmYWN0aW9uPWNsaWNrUmVkaXJlY3QmZG9Ob3RMb2dDbGljaz10cnVl) to the kit I used. Pretty cheap @ <$15! Before using/buying this kit, you can see all of the data sheets on what is inside of the kit by downloading the zip file for this kit from [the vendor's website](http://www.elegoo.com/download/).
 
 Also watched a neat [youtube](https://www.youtube.com/watch?v=RHpo4wKo8pQ) video giving a high level overview of different components found in most circuits. This is a summary of the notes I took from that video.
 
