@@ -42,12 +42,12 @@ Legend
 +-------------------------------------+
 | .^v^.        = 1k ohm Resistor      |
 +-------------------------------------+
-| [o]-.        = button & cathode     |
-|   `-.        = button & anode       |
+| [o]-.        = button & anode       |
+|   `-.        = button & cathnode    |
 +-------------------------------------+
-|  ___.--      = buzzer anode         |
+|  ___.--      = buzzer cathode       |
 | ( o )        = buzzer               |
-|  ---`--      = buzzer cathode       |
+|  ---`--      = buzzer anode         |
 +-------------------------------------+
 """
 from time import sleep
