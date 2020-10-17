@@ -57,9 +57,10 @@ from gpiozero import LED
 
 sensor = MotionSensor(14)
 light = LED(15)
+interval = 6
 
 
-def turn_on_and_recharge(led: object = light, recharge_time: int = 5):
+def turn_on_and_recharge(led: object = light, recharge_time: int = interval):
     """
     Description
     -----------
