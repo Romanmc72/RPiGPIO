@@ -8,10 +8,14 @@ Here is the hookup on the breadboard:
 .__________________________
 |\ main board       \ rail \.
 | +-----------------+-------+
-| | (LED)----.    .^v^.     |
+| | (L1 )----.    .^v^.     |
 | |     `----.    X |       |
 | |                 |       |
 | |  o            O | N   P |
+| |                 |       |
+| | (L2 )----.    .^v^.     |
+| |     `----.    Y |       |
+| |                 |       |
 | |                 | -   + |
  \+-----------------+-------+
 
@@ -24,9 +28,10 @@ O            = GPIO Pin 14
 N            = Cathode Pin on PIR Sensor
 P            = Anode Pin on PIR Sensor
 .^v^.        = 1k ohm Resistor
-(LED )-----. = LED Cathode
+(L#  )-----. = LED Cathode
      `-----. = LED Anode
 X            = GPIO Pin 15
+X            = GPIO Pin 18
 
 pin side (front)
      __--^--__
@@ -73,24 +78,38 @@ def turn_on_and_wait(sensor: object,
 
     Params
     ------
-    :light: object = SENSOR
+    :light: object
     The sensor you are using to sense for motion.
 
-    :led: object = LIGHT
+    :led: object
     The LED you are triggering.
 
-    :shutdown_after_seconds: int = SHUTDOWN_AFTER
+    :detection_led: object
+    The LED which will correspond directly with the motion sensor's signals.
+
+    :shutdown_after_seconds: int
     How many seconds to sleep before proceeding to read the signal again.
 
-    :rescan_after_seconds: int = SCAN_INTERVAL
+    :rescan_after_seconds: int
     The number of seconds to wait before scanning again.
 
     Return
     ------
     None
     """
+
+    # This will add a light that shows when the motion sensor is actually
+    # reading motion and sending a signal. This was necessary to tune the
+    # potentiometer in order to see what the best trigger duration is. The
+    # sensor appears to only be able to send a signal every ~5 seconds, but
+    # can have a signal sent which lasts for well over a minute. The
+    # potentiometer was very tricky to tune, but as long as your rescan
+    # interval and potentiometer are roughly the same interval then you should
+    # have no trouble using this. If anything it is better that the
+    # potentiometer be tuned to slightly longer.
     sensor.when_motion = detection_led.on
     sensor.when_no_motion = detection_led.off
+
     started_waiting_time = time()
     while True:
         current_time = time()
