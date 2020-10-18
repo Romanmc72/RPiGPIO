@@ -51,52 +51,101 @@ here as well!
 [http://www.diymalls.com/HC-SR501-PIR-Infared-Sensor?search=PIR%20Sens]
 """
 from time import sleep
+from time import time
 
 from gpiozero import MotionSensor
 from gpiozero import LED
 
-sensor = MotionSensor(14)
-light = LED(15)
-interval = 6
 
-
-def turn_on_and_recharge(led: object = light, recharge_time: int = interval):
+def turn_on_and_wait(sensor: object,
+                     led: object,
+                     shutdown_after_seconds: int,
+                     rescan_after_seconds: int) -> None:
     """
     Description
     -----------
-    Turns on the LED then allows the motion sensor to sleep however long it
-    needs to recharge. This should give the illusion of constant motion
-    detection at whatever the interval is.
+    Turns on the LED if motion is detected and lets it stay on at least as
+    long as the :shutdown_after_seconds: variable. It will count by the intervals
+    specified in the :rescan_after_seconds:. After that many seconds it will
+    wait for addition al motion, if motion is detected it will reset the timer
+    until it detects no motion for long enough to shut down.
 
     Params
     ------
-    :led: object = light
-    the LED you are triggering
+    :light: object = SENSOR
+    The sensor you are using to sense for motion.
 
-    :recharge_time: int = 5
-    how many seconds to sleep before proceeding to read the signal again.
+    :led: object = LIGHT
+    The LED you are triggering.
+
+    :shutdown_after_seconds: int = SHUTDOWN_AFTER
+    How many seconds to sleep before proceeding to read the signal again.
+
+    :rescan_after_seconds: int = SCAN_INTERVAL
+    The number of seconds to wait before scanning again.
+
+    Return
+    ------
+    None
     """
-    led.on()
-    sleep(recharge_time)
+    started_waiting_time = time.time()
+    while True:
+        current_time = time.time()
+        if sensor.active_state:
+            started_waiting_time = current_time
+            print("Motion detected.")
+            print(f"{'Keeping' if led.is_lit else 'Turning'} the light on.")
+            print("Resetting timer to 0.")
+            led.on()
+        else:
+            print(f"No motion detected for {current_time - started_waiting_time}")
+            if current_time - started_waiting_time >= shutdown_after_seconds:
+                print(f"No motion detected for greater than {shutdown_after_seconds}. Shutting Down.")
+                led.off()
+                break
+        print(f"Is the light lit?: `{led.is_lit}`")
+        sleep(rescan_after_seconds)
 
-# Set this and then just run in an infinite loop until keyboard interrupt. You
-# will notice that the sensor gets a singal for activation, then regardless of
-# whether or not activity is still happening it shuts off the signal then
-# checks again. Despite whatever you set the timing to, the sensor takes a few
-# seconds to recharge before it can sense new motion. So it effectively senses
-# motion and immediately does the action. The signal to do the action lasts as
-# long as you set it for then after the output duration has ended it stops
-# regardless of whether or not there is still motion. It then recharges its
-# energy bank for the next motion detection, once detected again after
-# recharge it will send a new signal. The real world motion cna be non stop
-# but the sensor can only send signal in little intervals.
-sensor.when_activated =  turn_on_and_recharge
-sensor.when_deactivated = light.off
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser("The program for running the motions sensor and an LED.")
+    parser.add_argument(
+        '--sensor_pin',
+        required=False,
+        default=14,
+        help="The GPIO pin receiving the sensor output. (default: 14)"
+    )
+    parser.add_argument(
+        '--led_pin',
+        required=False,
+        default=15,
+        help="The GPIO pin sending the signal to trun the LED on or off. (default: 15)"
+    )
+    parser.add_argument(
+        '--shutdown_after_seconds',
+        required=False,
+        default=5 * 60,
+        help="In seconds, how long to wait after no motion is detected to " +
+             "shut down the LED. (default: 5 * 60)"
+    )
+    parser.add_argument(
+        '--rescan_after_seconds',
+        required=False,
+        default=1,
+        help="In seconds, how long to wait between motion checks. (default: 1)"
+    )
+    args = parser.parse_args()
     while True:
         try:
-            pass
+            turn_on_and_wait(
+                sensor=MotionSensor(args.sensor_pin),
+                led=LED(args.led_pin),
+                shutdown_after_seconds=args.shutdown_after_seconds,
+                rescan_after_seconds=args.rescan_after_seconds
+            )
         except KeyboardInterrupt:
+            print("Ending the program.")
             sensor.close()
             light.close()
+            break
