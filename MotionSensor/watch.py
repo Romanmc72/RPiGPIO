@@ -141,8 +141,8 @@ if __name__ == "__main__":
             turn_on_and_wait(
                 sensor=MotionSensor(args.sensor_pin),
                 led=LED(args.led_pin),
-                shutdown_after_seconds=args.shutdown_after_seconds,
-                rescan_after_seconds=args.rescan_after_seconds
+                shutdown_after_seconds=int(args.shutdown_after_seconds),
+                rescan_after_seconds=int(args.rescan_after_seconds)
             )
         except KeyboardInterrupt:
             print("Ending the program.")
