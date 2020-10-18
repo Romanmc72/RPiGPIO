@@ -89,8 +89,8 @@ def turn_on_and_wait(sensor: object,
     ------
     None
     """
-    sensor.when_motion = detection_led.on()
-    sensor.when_no_motion = detection_led.off()
+    sensor.when_motion = detection_led.on
+    sensor.when_no_motion = detection_led.off
     started_waiting_time = time()
     while True:
         current_time = time()
