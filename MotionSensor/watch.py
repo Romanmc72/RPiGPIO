@@ -88,9 +88,9 @@ def turn_on_and_wait(sensor: object,
     ------
     None
     """
-    started_waiting_time = time.time()
+    started_waiting_time = time()
     while True:
-        current_time = time.time()
+        current_time = time()
         if sensor.active_state:
             started_waiting_time = current_time
             print("Motion detected.")
