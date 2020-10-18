@@ -59,6 +59,7 @@ from gpiozero import LED
 
 def turn_on_and_wait(sensor: object,
                      led: object,
+                     detection_led: object,
                      shutdown_after_seconds: int,
                      rescan_after_seconds: int) -> None:
     """
@@ -88,6 +89,8 @@ def turn_on_and_wait(sensor: object,
     ------
     None
     """
+    sensor.when_motion = detection_light.on()
+    sensor.when_no_motion = detection_light.off()
     started_waiting_time = time()
     while True:
         current_time = time()
@@ -120,14 +123,19 @@ if __name__ == "__main__":
         '--led_pin',
         required=False,
         default=15,
-        help="The GPIO pin sending the signal to trun the LED on or off. (default: 15)"
+        help="The GPIO pin sending the signal to run the LED on or off. (default: 15)"
+    )
+    parser.add_argument(
+        '--detection_led_pin',
+        required=False,
+        default=18,
+        help="The GPIO pin sending the signal to run the LED detection pin. This pin just follows the sensor's output. (default: 18)"
     )
     parser.add_argument(
         '--shutdown_after_seconds',
         required=False,
         default=5 * 60,
-        help="In seconds, how long to wait after no motion is detected to " +
-             "shut down the LED. (default: 5 * 60)"
+        help="In seconds, how long to wait after no motion is detected to shut down the LED. (default: 5 * 60)"
     )
     parser.add_argument(
         '--rescan_after_seconds',
@@ -136,16 +144,21 @@ if __name__ == "__main__":
         help="In seconds, how long to wait between motion checks. (default: 1)"
     )
     args = parser.parse_args()
+    sensor = MotionSensor(args.sensor_pin)
+    led = LED(args.led_pin)
+    detection_led = LED(args.detection_led_pin)
     while True:
         try:
             turn_on_and_wait(
-                sensor=MotionSensor(args.sensor_pin),
-                led=LED(args.led_pin),
+                sensor=sensor,
+                led=led,
+                detection_led=detection_led,
                 shutdown_after_seconds=int(args.shutdown_after_seconds),
                 rescan_after_seconds=int(args.rescan_after_seconds)
             )
         except KeyboardInterrupt:
             print("Ending the program.")
             sensor.close()
-            light.close()
+            led.close()
+            detection_led.close()
             break
