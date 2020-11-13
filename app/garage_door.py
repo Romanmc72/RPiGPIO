@@ -33,7 +33,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger.info("Connecting garage door opener to pin ({pin})".format(pin=args.pin))
     try:
-        garage_door = LED(args.pin, active_high=False)
+        garage_door = LED(args.pin)
         logger.info("Triggering garage door.")
         garage_door.toggle()
         sleep(0.5)
