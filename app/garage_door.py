@@ -10,6 +10,22 @@ it from open to closed or vice versa.
 
 This program is ignorant of the state of the garage door. That will be left to
 another program to decipher.
+
+I have the 14th pin set by default but you can use any GPIO pin.
+
+I would advise adding this line to the end of `/boot/config.txt` so that when
+the Pi reboots, it does not fire a signal to open the garage door in the middle
+of the night.
+
+add this at the end:
+
+```
+[gpio]
+# Sets the gpio pin to output & low on startup to avoid triggering on reboot.
+# If you use a pin other than 14, simply change hte pin number.
+gpio=14=op,dl
+```
+
 """
 import os
 from time import sleep
