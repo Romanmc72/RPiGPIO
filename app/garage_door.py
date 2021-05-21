@@ -30,8 +30,8 @@ additionally if the library for GPIO is not on you pi, run these:
 
 ```bash
 sudo apt update
-sudo apt install python3-gpiozero
-sudo apt install python-gpiozero
+sudo apt install python3-gpiozero -y
+sudo apt install python-gpiozero -y
 ```
 
 """
