@@ -144,3 +144,4 @@ if __name__ == "__main__":
         activation_duration=args.activation_duration,
         debug_pin=args.debug_pin,
     )
+    sensor.run()
