@@ -115,12 +115,17 @@ class MotionActivated:
             self.debug.off()
 
     def run(self):
-        while True:
-            sleep(1)
-            if self.activated_for == 0:
-                self.activator.off()
-                continue
-            self.activated_for -= 1
+        try:
+            while True:
+                sleep(1)
+                if self.activated_for == 0:
+                    self.activator.off()
+                    continue
+                self.activated_for -= 1
+        finally:
+            self.activator.off()
+            if self.debug:
+                self.debug.off()
 
 
 if __name__ == "__main__":
