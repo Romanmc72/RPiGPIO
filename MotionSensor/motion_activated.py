@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 The class that tracks motion from a PIR sensor.
+
+This program has been triggered on startup from `/etc/rc.local`
 """
 from time import sleep
 from typing import Optional
