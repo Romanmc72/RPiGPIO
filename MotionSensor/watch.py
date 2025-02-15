@@ -31,7 +31,7 @@ P            = Anode Pin on PIR Sensor
 (L#  )-----. = LED Cathode
      `-----. = LED Anode
 X            = GPIO Pin 15
-X            = GPIO Pin 18
+Y            = GPIO Pin 18
 
 pin side (front)
      __--^--__
@@ -181,3 +181,24 @@ if __name__ == "__main__":
             led.close()
             detection_led.close()
             break
+
+
+while True:
+    still_moving = sensor.motion_detected
+    if still_moving:
+            last_detected = time()
+    keep_on = abs(time() - last_detected) <= 60
+    if (still_moving or keep_on) and not led_on:
+            print("Motion detected, turining LED on!")
+            led.toggle()
+    elif (still_moving or keep_on) and led_on:
+            print(f"LED Still on... for `{time() - last_detected}` seconds")
+    elif not (still_moving or keep_on) and not led_on:
+            print("nothing detected...")
+    elif not (still_moving or keep_on) and led_on:
+            print(f"Dormant for `{time() - last_detected}` seconds, turning off")
+            led.toggle()
+    else:
+            print("idk how we got here?")
+    sleep(5)
+    led_on = led.is_lit
