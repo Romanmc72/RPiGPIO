@@ -10,6 +10,9 @@ from typing import Optional
 from gpiozero import MotionSensor
 from gpiozero import LED
 
+from ..app.logs import get_logger
+
+LOGGER = get_logger("MotionActivated")
 
 class MotionActivated:
     def __init__(self, sensor_pin: int, activator_pin: int, activation_duration: int, debug_pin: Optional[int] = None) -> None:
@@ -43,6 +46,7 @@ class MotionActivated:
 
         Here is the hookup on the breadboard for 2 simple LEDs:
 
+        ```
         .__________________________
         |\ main board       \ rail \.
         | +-----------------+-------+
@@ -89,6 +93,8 @@ class MotionActivated:
         A) Output Duration
         B) Sensitivity
 
+        ```
+
         The PIR Sensor is difficult to represent with terminal art so I will link it
         here as well!
         [http://www.diymalls.com/HC-SR501-PIR-Infared-Sensor?search=PIR%20Sens]
@@ -105,29 +111,42 @@ class MotionActivated:
         self.activator = LED(activator_pin)
         self.debug_pin = debug_pin
         self.debug = LED(debug_pin) if debug_pin else None
+        LOGGER.info(
+            f"Initialized Motion Sensor to {sensor_pin=}, {activator_pin=}, " +
+            f"{activation_duration=}, {debug_pin=}"
+        )
 
     def _sense_motion(self):
+        LOGGER.info(
+            f"Motion detected, resetting timer from {self.activated_for} " +
+            f"to {self.activation_duration}."
+        )
         self.activated_for = self.activation_duration
         self.activator.on()
         if self.debug:
+            LOGGER.debug("Motion detected!")
             self.debug.on()
 
     def _no_motion_sensed(self):
         if self.debug:
+            LOGGER.debug("No motion detected...")
             self.debug.off()
 
     def run(self):
+        LOGGER.info("Beginning to watch the lights...")
         try:
             while True:
-                sleep(1)
+                sleep(self._sleep_duration)
                 if self.activated_for == 0:
                     self.activator.off()
                     continue
                 self.activated_for -= 1
         finally:
+            LOGGER.error("Sensor shutdown detected! Shutting things off.")
             self.activator.off()
             if self.debug:
                 self.debug.off()
+            LOGGER.debug("Done.")
 
 
 if __name__ == "__main__":
