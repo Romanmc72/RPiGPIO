@@ -4,6 +4,7 @@ The class that tracks motion from a PIR sensor.
 
 This program has been triggered on startup from `/etc/rc.local`
 """
+import logging
 from time import sleep
 from typing import Optional
 
@@ -111,6 +112,8 @@ class MotionActivated:
         self.activator = LED(activator_pin)
         self.debug_pin = debug_pin
         self.debug = LED(debug_pin) if debug_pin else None
+        if self.debug:
+            LOGGER.setLevel(logging.DEBUG)
         LOGGER.info(
             f"Initialized Motion Sensor to {sensor_pin=}, {activator_pin=}, " +
             f"{activation_duration=}, {debug_pin=}"
@@ -136,7 +139,7 @@ class MotionActivated:
         LOGGER.info("Beginning to watch the lights...")
         try:
             while True:
-                sleep(self._sleep_duration)
+                sleep(1)
                 if self.activated_for == 0:
                     self.activator.off()
                     continue
