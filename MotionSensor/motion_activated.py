@@ -11,7 +11,7 @@ from typing import Optional
 from gpiozero import MotionSensor
 from gpiozero import LED
 
-from ..app.logs import get_logger
+from logs import get_logger
 
 LOGGER = get_logger("MotionActivated")
 
