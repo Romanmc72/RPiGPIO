@@ -142,7 +142,7 @@ class MotionActivated:
         try:
             while True:
                 sleep(1)
-                if self.activated_for == 0:
+                if self.activated_for <= 0:
                     self.activator.off()
                     continue
                 self.activated_for -= 1
