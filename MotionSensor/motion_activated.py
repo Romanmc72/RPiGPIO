@@ -114,6 +114,8 @@ class MotionActivated:
         self.debug = LED(debug_pin) if debug_pin else None
         if self.debug:
             LOGGER.setLevel(logging.DEBUG)
+        else:
+            LOGGER.setLevel(logging.INFO)
         LOGGER.info(
             f"Initialized Motion Sensor to {sensor_pin=}, {activator_pin=}, " +
             f"{activation_duration=}, {debug_pin=}"
