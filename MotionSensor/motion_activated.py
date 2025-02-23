@@ -98,7 +98,7 @@ class MotionActivated:
 
         The PIR Sensor is difficult to represent with terminal art so I will link it
         here as well!
-        [http://www.diymalls.com/HC-SR501-PIR-Infared-Sensor?search=PIR%20Sens]
+        https://www.mpja.com/download/31227sc.pdf
         """
         self.sensor_pin = sensor_pin
         self.sensor = MotionSensor(sensor_pin)
@@ -129,7 +129,6 @@ class MotionActivated:
         self.activated_for = self.activation_duration
         self.activator.on()
         if self.debug:
-            LOGGER.debug("Motion detected!")
             self.debug.on()
 
     def _no_motion_sensed(self):
