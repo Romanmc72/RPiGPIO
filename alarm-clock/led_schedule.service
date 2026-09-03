@@ -1,0 +1,14 @@
+[Unit]
+Description=Scheduled LED Controller and audio alarm clock
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/scheduled_leds.py
+WorkingDirectory=/home/pi
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=pi
+
+[Install]
+WantedBy=multi-user.target

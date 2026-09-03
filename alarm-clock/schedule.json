@@ -1,0 +1,61 @@
+{
+  "kill_switches": {
+    "disable_all": false,
+    "disable_lights": false,
+    "disable_audio": false
+  },
+  "timezone": "America/Chicago",
+  "audio": {
+    "audio_dir": "/home/pi/wake-up-calls",
+    "last_played_file": "/home/pi/wake-up-calls/good-morning-05.wav"
+  },
+  "state": {
+    "last_triggered_slot": "2026-09-03_morning"
+  },
+  "schedules": {
+    "default": [
+      {
+        "name": "morning",
+        "start": "06:40",
+        "end": "13:00",
+        "play_audio": true
+      },
+      {
+        "name": "afternoon",
+        "start": "15:00",
+        "end": "19:00",
+        "play_audio": false
+      }
+    ],
+    "weekends": [
+      {
+        "name": "morning",
+        "start": "07:00",
+        "end": "13:00",
+        "play_audio": false
+      },
+      {
+        "name": "afternoon",
+        "start": "15:00",
+        "end": "19:00",
+        "play_audio": false
+      }
+    ]
+  },
+  "date_overrides": {
+    "2026-09-07": [
+      {
+        "name": "morning",
+        "start": "07:00",
+        "end": "13:00",
+        "play_audio": false
+      },
+      {
+        "name": "afternoon",
+        "start": "15:00",
+        "end": "19:00",
+        "play_audio": false
+      }
+    ]
+  }
+}
