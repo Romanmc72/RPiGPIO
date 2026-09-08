@@ -55,7 +55,7 @@ Config
 ------
 
 Then the sistering config file pointed to by CONFIG_PATH should be set up
-similar to the example here. You can see there are overrides shown in order of precendence:
+similar to the example here. You can see there are overrides shown in order of precedence:
 
 - the highest priority of an ISO date specific override (example shown is Labor Day 2026)
 - specific day of week overrides 
