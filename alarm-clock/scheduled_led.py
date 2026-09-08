@@ -79,6 +79,79 @@ sudo systemctl daemon-reload
 sudo systemctl enable led_schedule.service
 sudo systemctl start led_schedule.service
 ```
+
+Config Schema
+-------------
+Here is the configuration schema. Anything "Optional" can be omitted:
+
+{
+    # Overrides to turn off features
+    "kill_switches": {
+        # Disables audio and lights
+        "disable_all": Optional[bool] (default False),
+
+        # Disables lights
+        "disable_lights": Optional[bool] (default False),
+
+        # Disables audio
+        "disable_audio": Optional[bool] (default False),
+    },
+    
+    # Timezone to evaluate the schedules against
+    "timezone": str | Enum[timezone] | (example: "America/Chicago"),
+    
+    # Setting up the audio
+    "audio": {
+        # Where the .wav files are stored with recordings to play on audio trigger
+        "audio_dir": Optional[str] | (default "/home/pi/sounds"),
+    },
+
+    # In-app state tracking, do not manually set, these will change
+    "state": {
+        # The previously played audio file to prevent duplicates (if only 1 present, it will be replayed)
+        "last_played_file": Optional[str] (default ""),
+
+        # The last triggered alarm to prevent re-triggering the same alarm that just fired
+        "last_triggered_slot": Optional[str] (default "")
+    },
+
+    # The schedules to trigger. Each entry contain at least 1 "Schedule". There are 3 allowed entries/
+    # Options
+    # -------
+    # - "default"
+    # - "weekends"
+    # - "weekdays"
+    "schedules": {
+        # The default schedules to consider if weekends or weekdays are not specified
+        # 
+        "default": Optional[List[Schedule]],
+
+        # The schedules to consider on Saturday or Sunday
+        "weekends": Optional[List[Schedule]],
+
+        # The schedules to consider from Monday through Friday
+        "weekdays": Optional[List[Schedule]],
+    },
+
+    # An optional date-keyed schedule that has overrides for specific calendar
+    # days. The keys need to be in ISO date format without the time component.
+    # An example is shown below:
+    "date_overrides": {
+    
+        # An override schedule for Labor Day (US Holiday) in 2026
+        "2026-09-07": List[Schedule],
+    },
+}
+
+`Schedule` schema
+
+Schedule = {
+    "name": str,
+    "start": str | format("HH:MM") 24 hour format,
+    "end": str | format("HH:MM") 24 hour format (needs to be after start),
+    "play_audio": bool
+}
+
 """
 import os
 import sys
@@ -96,6 +169,7 @@ green_led = LED(2)
 red_led = LED(3)
 
 CONFIG_PATH = "/home/pi/schedule.json"
+DEFAULT_AUDIO_DIR = "/hom/pi/sounds"
 
 def load_config():
     """Reads config from disk to dynamically apply settings changes."""
@@ -120,14 +194,14 @@ def play_random_wav(config):
         print("Audio suppressed by global kill switch.")
         return
 
-    audio_dir = config["audio"].get("audio_dir", "/home/pi/sounds")
+    audio_dir = config["audio"].get("audio_dir", DEFAULT_AUDIO_DIR)
     wav_files = glob(os.path.join(audio_dir, "*.wav"))
 
     if not wav_files:
         print(f"No .wav files found in directory: {audio_dir}")
         return
 
-    last_played = config["audio"].get("last_played_file", "")
+    last_played = config["state"].get("last_played_file", "")
     candidates = [f for f in wav_files if f != last_played]
     if not candidates:
         candidates = wav_files
@@ -149,7 +223,7 @@ def get_active_schedule_rules(now, config):
 
     # 1. Date Specific Override (YYYY-MM-DD)
     date_overrides = config.get("date_overrides", {})
-    if date_str in date_overrides:
+    if date_str in date_overrides and date_overrides[date_str]:
         print(f"Using date override for {date_str}")
         return date_overrides[date_str]
 
@@ -160,9 +234,9 @@ def get_active_schedule_rules(now, config):
         return schedules[day_name]
 
     # 3. Weekend vs Weekday Grouping
-    if is_weekend and "weekends" in schedules:
+    if is_weekend and "weekends" in schedules and schedules["weekends"]:
         return schedules["weekends"]
-    elif not is_weekend and "weekdays" in schedules:
+    elif not is_weekend and "weekdays" in schedules and schedules["weekdays"]:
         return schedules["weekdays"]
 
     # 4. Fallback Default

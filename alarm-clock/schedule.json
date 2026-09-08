@@ -6,10 +6,10 @@
   },
   "timezone": "America/Chicago",
   "audio": {
-    "audio_dir": "/home/pi/wake-up-calls",
-    "last_played_file": "/home/pi/wake-up-calls/good-morning-05.wav"
+    "audio_dir": "/home/pi/wake-up-calls"
   },
   "state": {
+    "last_played_file": "/home/pi/wake-up-calls/good-morning-05.wav",
     "last_triggered_slot": "2026-09-03_morning"
   },
   "schedules": {
