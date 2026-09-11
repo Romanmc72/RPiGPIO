@@ -154,7 +154,6 @@ Schedule = {
 
 """
 import os
-import sys
 import time
 import json
 import random
@@ -171,6 +170,7 @@ red_led = LED(3)
 CONFIG_PATH = "/home/pi/schedule.json"
 DEFAULT_AUDIO_DIR = "/hom/pi/sounds"
 
+
 def load_config():
     """Reads config from disk to dynamically apply settings changes."""
     try:
@@ -180,6 +180,7 @@ def load_config():
         print(f"Error reading config: {e}")
         return None
 
+
 def save_config(config):
     """Writes updated state/config safely to disk."""
     try:
@@ -187,6 +188,7 @@ def save_config(config):
             json.dump(config, f, indent=2)
     except Exception as e:
         print(f"Error saving config: {e}")
+
 
 def play_random_wav(config):
     """Selects a random WAV file (different from last time) and plays it via aplay."""
@@ -215,6 +217,7 @@ def play_random_wav(config):
     except Exception as e:
         print(f"Failed to run aplay: {e}")
 
+
 def get_active_schedule_rules(now, config):
     """Selects schedule rules based on precedence: Specific Date > Day Name > Weekend/Weekday > Default."""
     date_str = now.strftime("%Y-%m-%d")
@@ -242,6 +245,7 @@ def get_active_schedule_rules(now, config):
     # 4. Fallback Default
     return schedules.get("default", [])
 
+
 def get_current_slot(now, rules):
     """Evaluates active time rules against local clock."""
     current_time = now.time()
@@ -254,6 +258,7 @@ def get_current_slot(now, rules):
             return slot["name"], slot
 
     return None, None
+
 
 def update_system():
     config = load_config()
@@ -302,7 +307,21 @@ def update_system():
     status_str = f"Slot: {slot_name or 'OFF'}"
     print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] Check complete. ({status_str})")
 
+
+def reset_speaker():
+    print("Resetting speaker")
+    process = subprocess.Popen(["speaker-test", "-c", "2", "-t", "wav"])
+    time.sleep(1.5)
+    process.terminate()
+    process.wait()
+    print(f"Speaker test exit code: {process.returncode}")
+
+
 def main():
+    try:
+        reset_speaker()
+    except:
+        print("Something went wrong resetting the speaker")
     print("Starting LED & Audio Controller...")
     try:
         while True:
@@ -312,6 +331,7 @@ def main():
         print("\nStopping...")
         green_led.off()
         red_led.off()
+
 
 if __name__ == "__main__":
     main()
