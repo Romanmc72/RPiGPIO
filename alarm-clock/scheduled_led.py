@@ -123,7 +123,6 @@ Here is the configuration schema. Anything "Optional" can be omitted:
     # - "weekdays"
     "schedules": {
         # The default schedules to consider if weekends or weekdays are not specified
-        # 
         "default": Optional[List[Schedule]],
 
         # The schedules to consider on Saturday or Sunday
