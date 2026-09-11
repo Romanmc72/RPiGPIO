@@ -212,7 +212,7 @@ def play_random_wav(config):
 
     try:
         subprocess.Popen(["aplay", chosen_file])
-        config["audio"]["last_played_file"] = chosen_file
+        config["state"]["last_played_file"] = chosen_file
     except Exception as e:
         print(f"Failed to run aplay: {e}")
 
