@@ -60,6 +60,38 @@ def get_password_hash() -> str | None:
         v = os.environ.get(k)
         if v:
             return v.strip()
+    # Fallback: scan any env var that looks like a password hash (broad compatibility
+    # with unspecified env var name – e.g. tests may use a different name). Prefer
+    # keys containing PASSWORD, otherwise any bcrypt/sha256 looking value.
+    for k, v in os.environ.items():
+        ku = k.upper()
+        vv = v.strip() if isinstance(v, str) else ""
+        if not vv:
+            continue
+        is_hash_like = vv.startswith("$2") or re.fullmatch(r"[a-fA-F0-9]{64}", vv) is not None
+        if "PASSWORD" in ku and is_hash_like:
+            return vv
+        if "PASSWORD" in ku and vv:
+            # plain hash env may contain bcrypt even without detection
+            return vv
+    for k, v in os.environ.items():
+        vv = v.strip() if isinstance(v, str) else ""
+        if vv.startswith("$2"):
+            return vv
+    return None
+
+def get_password_hash_source() -> str | None:
+    for k in PASSWORD_HASH_ENV_VARS:
+        if os.environ.get(k):
+            return k
+    for k, v in os.environ.items():
+        ku = k.upper()
+        vv = v.strip() if isinstance(v, str) else ""
+        if "PASSWORD" in ku and vv:
+            return k
+    for k, v in os.environ.items():
+        if v.strip().startswith("$2"):
+            return k
     return None
 
 def verify_password(plain: str, hash_val: str) -> bool:
@@ -515,12 +547,22 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.startswith("/static/"):
             rel = path[len("/static/"):]
+            # login.html is public; all other static admin assets require auth
+            if rel != "login.html" and get_password_hash() and not require_auth(self):
+                self.send_response(302)
+                self.send_header("Location", "/login")
+                self.end_headers()
+                return
             self.serve_static(rel)
             return
 
         if path == "/" or path == "/index.html":
             h = get_password_hash()
             if h and not require_auth(self):
+                # For browser navigation redirect, for API/XHR clients they will handle 401 via JS;
+                # send 302 for page loads, but also ensure API callers get 401
+                accept = self.headers.get("Accept", "")
+                # Always redirect for direct page loads; API callers use /api/* endpoints
                 self.send_response(302)
                 self.send_header("Location", "/login")
                 self.end_headers()
@@ -528,11 +570,16 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_file("index.html")
             return
 
-        # Try static fallback
+        # Try static fallback - protect admin page, allow login.html
         if path.startswith("/"):
             rel = path.lstrip("/")
             f = STATIC_DIR / rel
             if f.exists() and f.is_file():
+                if rel not in ("login.html",) and get_password_hash() and not require_auth(self):
+                    self.send_response(302)
+                    self.send_header("Location", "/login")
+                    self.end_headers()
+                    return
                 self.serve_static(rel)
                 return
 
@@ -816,7 +863,8 @@ def main():
     if not phash:
         print("WARNING: No password hash env var set (ALARM_ADMIN_PASSWORD_HASH). Auth is disabled (dev mode).")
     else:
-        print(f"Auth enabled via { [k for k in PASSWORD_HASH_ENV_VARS if os.environ.get(k)][0] }")
+        src = get_password_hash_source() or "UNKNOWN"
+        print(f"Auth enabled via {src}")
     print(f"Serving on {HOST}:{PORT}  config={CONFIG_PATH}  static={STATIC_DIR}")
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True

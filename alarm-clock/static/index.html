@@ -93,6 +93,7 @@ function toast(msg, ms=3000){
 
 async function api(path, opts={}){
  opts.headers=opts.headers||{};
+ opts.credentials='same-origin';
  // include session via cookie automatically
  let r=await fetch(path, opts);
  if(r.status===401){ location.href='/login'; throw new Error('unauthorized'); }
@@ -442,12 +443,12 @@ async function uploadRecording(){
  reader.readAsDataURL(_blob);
 }
 
-function logout(){ fetch('/api/logout',{method:'POST'}).then(()=>location.href='/login'); }
+function logout(){ fetch('/api/logout',{method:'POST',credentials:'same-origin'}).then(()=>location.href='/login'); }
 
 // SSE for live updates
 function connectSSE(){
  let token = null; // cookie handles auth, but also try token from cookie not needed
- let es=new EventSource('/api/events');
+ let es=new EventSource('/api/events', {withCredentials:true});
  es.onopen=()=>{ document.getElementById('conn').textContent='connected'; document.getElementById('conn').style.background='#2a7'; document.getElementById('conn').style.color='#fff'; };
  es.onerror=()=>{ document.getElementById('conn').textContent='disconnected'; document.getElementById('conn').style.background='#c33'; };
  es.onmessage=e=>{

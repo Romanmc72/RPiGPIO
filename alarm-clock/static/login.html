@@ -23,7 +23,7 @@ button{background:#2a7;color:#fff;border:none;cursor:pointer;border-radius:6px}
 document.getElementById('loginForm').addEventListener('submit', async e=>{
  e.preventDefault();
  const pw=document.getElementById('password').value;
- const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+ const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({password:pw})});
  const j=await r.json();
  if(r.ok){ location.href='/'; } else { document.getElementById('msg').textContent=j.error||'Login failed'; }
 });
