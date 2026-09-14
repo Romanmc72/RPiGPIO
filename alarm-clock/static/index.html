@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alarm Clock Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;margin:0;padding:0;background:#f5f5f5;color:#222}
+header{background:#222;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center}
+header h1{margin:0;font-size:1.2rem}
+.container{max-width:1000px;margin:20px auto;padding:0 16px}
+.card{background:#fff;border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.card h2{margin:0 0 12px 0;font-size:1.1rem}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+label{font-size:.9rem}
+input,select,button{padding:6px 8px;border:1px solid #ccc;border-radius:6px}
+button{cursor:pointer;background:#2a7;color:#fff;border:none}
+button.secondary{background:#666}
+button.danger{background:#c33}
+button:disabled{opacity:.5;cursor:not-allowed}
+table{width:100%;border-collapse:collapse}
+th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:.9rem}
+.badge{display:inline-block;padding:2px 6px;border-radius:4px;background:#eee;font-size:.8rem}
+.kill{display:flex;gap:16px;flex-wrap:wrap}
+.kill label{display:flex;gap:6px;align-items:center}
+#status{position:fixed;bottom:12px;right:12px;background:#333;color:#fff;padding:8px 12px;border-radius:6px;display:none}
+.error{color:#c00;font-size:.85rem}
+.muted{color:#666;font-size:.85rem}
+</style>
+</head>
+<body>
+<header>
+<h1>Alarm Clock Admin</h1>
+<div><span id="conn" class="badge">connecting...</span> <button class="secondary" onclick="logout()">Logout</button></div>
+</header>
+<div class="container">
+<div class="card" id="killCard">
+<h2>Kill Switches</h2>
+<div class="kill">
+<label><input type="checkbox" id="ks_all"> Disable All (audio + lights)</label>
+<label><input type="checkbox" id="ks_lights"> Disable Lights</label>
+<label><input type="checkbox" id="ks_audio"> Disable Audio</label>
+</div>
+<p class="muted">Changes save immediately.</p>
+<p id="killErr" class="error"></p>
+</div>
+
+<div class="card">
+<h2>Schedules</h2>
+<p class="muted">Zero or more awake blocks per schedule. If none, block is omitted. Default must have ≥1. Times as HH:MM, no overlaps, names unique per schedule.</p>
+<div id="schedules"></div>
+</div>
+
+<div class="card">
+<h2>Date Overrides</h2>
+<p class="muted">ISO date (YYYY-MM-DD) → list of awake blocks. Empty overrides allowed. Stale overrides (2+ days old) are auto-pruned by daemon.</p>
+<div class="row"><input type="date" id="newOverrideDate"><button onclick="addOverride()">Add override date</button></div>
+<div id="overrides"></div>
+<p id="overrideErr" class="error"></p>
+</div>
+
+<div class="card">
+<h2>Audio Recordings</h2>
+<p class="muted">Directory: <span id="audioDir"></span></p>
+<div id="recList"></div>
+<hr>
+<h3>Create new recording</h3>
+<div class="row">
+<input type="text" id="recName" placeholder="recording name (alphanumeric . _ -)" pattern="[A-Za-z0-9._\-]+">
+<button id="recBtn" onclick="toggleRecord()">● Start Recording</button>
+<button onclick="uploadRecording()" id="uploadBtn" disabled>Save to server</button>
+<button class="secondary" onclick="clearRecording()">Clear</button>
+</div>
+<p class="muted">Record in browser, preview before saving. Saved as .wav</p>
+<audio id="preview" controls style="width:100%;display:none"></audio>
+<p id="recErr" class="error"></p>
+<p id="recMsg" class="muted"></p>
+</div>
+</div>
+<div id="status"></div>
+<script>
+let CONFIG=null;
+let HASH=null;
+let pendingBlocks={}; // preserve unsaved block drafts keyed by schedule id
+let _recorder=null, _chunks=[], _blob=null, _stream=null;
+
+function toast(msg, ms=3000){
+ const s=document.getElementById('status');
+ s.textContent=msg; s.style.display='block';
+ setTimeout(()=>s.style.display='none', ms);
+}
+
+async function api(path, opts={}){
+ opts.headers=opts.headers||{};
+ // include session via cookie automatically
+ let r=await fetch(path, opts);
+ if(r.status===401){ location.href='/login'; throw new Error('unauthorized'); }
+ return r;
+}
+
+async function loadConfig(){
+ let r=await api('/api/config');
+ let j=await r.json();
+ if(!r.ok) throw new Error(j.error);
+ CONFIG=j.config; HASH=j.hash;
+ renderAll();
+}
+
+function renderAll(){
+ // kill switches
+ document.getElementById('ks_all').checked=!!CONFIG.kill_switches?.disable_all;
+ document.getElementById('ks_lights').checked=!!CONFIG.kill_switches?.disable_lights;
+ document.getElementById('ks_audio').checked=!!CONFIG.kill_switches?.disable_audio;
+ // schedules
+ const schedDiv=document.getElementById('schedules');
+ schedDiv.innerHTML='';
+ const schedules=CONFIG.schedules||{};
+ const keys=['default','weekdays','weekends'];
+ // also include any day-name schedules
+ let extra=Object.keys(schedules).filter(k=>!keys.includes(k));
+ let allKeys=[...keys, ...extra];
+ for(let k of allKeys){
+   let blocks=schedules[k];
+   // if k is default/weekdays/weekends and not present, show empty with add button
+   let isPresent = k in schedules;
+   let card=document.createElement('div');
+   card.style.border='1px solid #ddd';
+   card.style.borderRadius='6px';
+   card.style.padding='8px';
+   card.style.margin='8px 0';
+   let title=k + (k==='default'?' (required ≥1)':'');
+   card.innerHTML=`<div class="row" style="justify-content:space-between"><strong>${title}</strong>
+     <span>${isPresent?`${(blocks||[]).length} block(s)`: 'not present (0 blocks → omitted)'}</span>
+     <button onclick="addBlock('${k}')">+ Add block</button></div>
+     <div id="sched-${k}"></div><p class="error" id="err-${k}"></p>`;
+   schedDiv.appendChild(card);
+   let container=card.querySelector(`#sched-${k}`);
+   if(isPresent && blocks){
+     blocks.forEach((b,idx)=> container.appendChild(renderBlock(k, b, idx)));
+   }
+   // show pending draft if exists
+   if(pendingBlocks[k]){
+     let draft=pendingBlocks[k];
+     container.appendChild(renderBlock(k, draft, -1, true));
+   }
+ }
+ // overrides
+ const ovDiv=document.getElementById('overrides');
+ ovDiv.innerHTML='';
+ const overrides=CONFIG.date_overrides||{};
+ for(let iso of Object.keys(overrides).sort()){
+   let blocks=overrides[iso];
+   let c=document.createElement('div');
+   c.style.border='1px solid #ddd';
+   c.style.borderRadius='6px';
+   c.style.padding='8px';
+   c.style.margin='8px 0';
+   c.innerHTML=`<div class="row" style="justify-content:space-between"><strong>${iso}</strong>
+     <button class="danger" onclick="removeOverride('${iso}')">Remove date</button>
+     <button onclick="addBlock('override:${iso}')">+ Add block</button></div>
+     <div id="ov-${iso}"></div><p class="error" id="err-ov-${iso}"></p>`;
+   ovDiv.appendChild(c);
+   let cont=c.querySelector(`#ov-${iso}`);
+   blocks.forEach((b,idx)=> cont.appendChild(renderBlock(`override:${iso}`, b, idx)));
+   if(pendingBlocks[`override:${iso}`]){
+     cont.appendChild(renderBlock(`override:${iso}`, pendingBlocks[`override:${iso}`], -1, true));
+   }
+ }
+ document.getElementById('audioDir').textContent=CONFIG.audio?.audio_dir||'';
+}
+
+function renderBlock(scheduleKey, block, idx, isDraft=false){
+ let div=document.createElement('div');
+ div.className='row';
+ div.style.margin='6px 0';
+ div.style.padding='6px';
+ div.style.background=isDraft?'#fffbe6':'#fafafa';
+ div.style.borderRadius='6px';
+ let idAttr=isDraft?'draft':'idx'+idx;
+ div.innerHTML=`
+   <input placeholder="name" value="${esc(block.name||'')}" id="name-${scheduleKey}-${idAttr}" style="width:120px">
+   <input type="time" value="${esc(block.start||'')}" id="start-${scheduleKey}-${idAttr}">
+   <span>to</span>
+   <input type="time" value="${esc(block.end||'')}" id="end-${scheduleKey}-${idAttr}">
+   <label><input type="checkbox" ${block.play_audio?'checked':''} id="audio-${scheduleKey}-${idAttr}"> audio</label>
+   ${isDraft? `<button onclick="saveDraft('${scheduleKey}')">Save</button><button class="secondary" onclick="cancelDraft('${scheduleKey}')">Cancel</button>`
+            : `<button class="secondary" onclick="saveBlock('${scheduleKey}',${idx})">Save</button><button class="danger" onclick="deleteBlock('${scheduleKey}',${idx})">Delete</button>`}
+ `;
+ return div;
+}
+function esc(s){ return String(s).replace(/"/g,'&quot;'); }
+
+function getBlockFromInputs(scheduleKey, idAttr){
+ return {
+   name: document.getElementById(`name-${scheduleKey}-${idAttr}`).value.trim(),
+   start: document.getElementById(`start-${scheduleKey}-${idAttr}`).value,
+   end: document.getElementById(`end-${scheduleKey}-${idAttr}`).value,
+   play_audio: document.getElementById(`audio-${scheduleKey}-${idAttr}`).checked
+ };
+}
+
+function addBlock(scheduleKey){
+ // create a draft so we don't wipe on refresh
+ pendingBlocks[scheduleKey]={name:'',start:'06:00',end:'07:00',play_audio:true};
+ renderAll();
+}
+
+function cancelDraft(k){ delete pendingBlocks[k]; renderAll(); }
+
+async function saveDraft(k){
+ let b=getBlockFromInputs(k,'draft');
+ let err=validateBlock(k,b, -1);
+ if(err){ document.getElementById(`err-${k}`)?.textContent || (document.getElementById(`err-ov-${k.split(':')[1]}`) && (document.getElementById(`err-ov-${k.split(':')[1]}`).textContent=err)); 
+   if(k.startsWith('override:')) document.getElementById(`err-ov-${k.slice(9)}`).textContent=err; else document.getElementById(`err-${k}`).textContent=err;
+   return;
+ }
+ // apply to CONFIG
+ applyBlock(k,b,-1,true);
+ delete pendingBlocks[k];
+ await pushConfig();
+}
+
+async function saveBlock(k, idx){
+ let b=getBlockFromInputs(k,'idx'+idx);
+ let area = k.startsWith('override:')?`err-ov-${k.slice(9)}`:`err-${k}`;
+ document.getElementById(area).textContent='';
+ let err=validateBlock(k,b, idx);
+ if(err){ document.getElementById(area).textContent=err; return; }
+ applyBlock(k,b,idx,false);
+ await pushConfig();
+}
+
+async function deleteBlock(k, idx){
+ if(!confirm('Delete this block?')) return;
+ applyDelete(k, idx);
+ await pushConfig();
+}
+
+function validateBlock(scheduleKey, block, idx){
+ if(!block.name) return 'name required';
+ if(!/^\d{2}:\d{2}$/.test(block.start)) return 'start must be HH:MM';
+ if(!/^\d{2}:\d{2}$/.test(block.end)) return 'end must be HH:MM';
+ let s=parseTime(block.start), e=parseTime(block.end);
+ if(s>=e) return 'start must be before end';
+ // unique name and overlap
+ let list=getList(scheduleKey);
+ for(let i=0;i<list.length;i++){
+   if(i===idx) continue;
+   if(list[i].name===block.name) return `name '${block.name}' already exists in ${scheduleKey}`;
+   let os=parseTime(list[i].start), oe=parseTime(list[i].end);
+   if(!(e<=os || s>=oe)) return `overlaps with '${list[i].name}' (${list[i].start}-${list[i].end})`;
+ }
+ return null;
+}
+function parseTime(t){ let [h,m]=t.split(':').map(Number); return h*60+m; }
+function getList(k){
+ if(k.startsWith('override:')){
+   let iso=k.slice(9);
+   return CONFIG.date_overrides?.[iso]||[];
+ } else {
+   return CONFIG.schedules?.[k]||[];
+ }
+}
+function applyBlock(k, block, idx, isNew){
+ if(k.startsWith('override:')){
+   let iso=k.slice(9);
+   CONFIG.date_overrides=CONFIG.date_overrides||{};
+   if(!CONFIG.date_overrides[iso]) CONFIG.date_overrides[iso]=[];
+   if(isNew) CONFIG.date_overrides[iso].push(block);
+   else CONFIG.date_overrides[iso][idx]=block;
+ } else {
+   CONFIG.schedules=CONFIG.schedules||{};
+   if(!CONFIG.schedules[k]) CONFIG.schedules[k]=[];
+   if(isNew) CONFIG.schedules[k].push(block);
+   else CONFIG.schedules[k][idx]=block;
+ }
+}
+function applyDelete(k, idx){
+ if(k.startsWith('override:')){
+   let iso=k.slice(9);
+   CONFIG.date_overrides[iso].splice(idx,1);
+   if(CONFIG.date_overrides[iso].length===0) delete CONFIG.date_overrides[iso];
+ } else {
+   CONFIG.schedules[k].splice(idx,1);
+   if(CONFIG.schedules[k].length===0) delete CONFIG.schedules[k];
+ }
+}
+
+function addOverride(){
+ let d=document.getElementById('newOverrideDate').value;
+ if(!d) return;
+ if(CONFIG.date_overrides && CONFIG.date_overrides[d]){ document.getElementById('overrideErr').textContent='date already exists'; return; }
+ document.getElementById('overrideErr').textContent='';
+ CONFIG.date_overrides=CONFIG.date_overrides||{};
+ CONFIG.date_overrides[d]=[];
+ // We don't auto push empty; user will add blocks. But ensure at least UI shows.
+ // Optionally push? Keep local until block added. But spec says iso date contains same schedules
+ // We'll push only when a block is added; for now just render with empty list but also we need to persist empty? Don't persist empty per normalize.
+ renderAll();
+ // Instead, create pending draft for that date
+ pendingBlocks[`override:${d}`]={name:'',start:'06:00',end:'07:00',play_audio:false};
+ renderAll();
+}
+async function removeOverride(iso){
+ if(!confirm(`Remove override ${iso}?`)) return;
+ delete CONFIG.date_overrides[iso];
+ await pushConfig();
+}
+
+async function pushConfig(){
+ // client-side check default at least 1
+ if(!CONFIG.schedules?.default || CONFIG.schedules.default.length===0){
+   toast('default must have at least 1 block', 4000);
+   // reload to reflect prior state? Keep CONFIG as is but don't push
+   return;
+ }
+ let r=await api('/api/config',{method:'PUT', headers:{'Content-Type':'application/json','X-Config-Hash':HASH}, body:JSON.stringify({config:CONFIG, hash:HASH})});
+ let j=await r.json();
+ if(r.status===409){
+   toast('Conflict: server changed (daemon win), refreshing',4000);
+   CONFIG=j.config; HASH=j.hash;
+   // preserve drafts
+   renderAll();
+   return;
+ }
+ if(!r.ok){
+   toast('Save failed: '+(j.details?j.details.join('; '):j.error),5000);
+   // if validation, re-render errors? keep local
+   return;
+ }
+ HASH=j.hash; CONFIG=j.config;
+ toast('Saved');
+ renderAll();
+ // also refresh recordings if audio_dir changed
+ loadRecordings();
+}
+
+// kill switches
+['ks_all','ks_lights','ks_audio'].forEach(id=>{
+ document.getElementById(id).addEventListener('change', async ()=>{
+   CONFIG.kill_switches=CONFIG.kill_switches||{};
+   CONFIG.kill_switches.disable_all=document.getElementById('ks_all').checked;
+   CONFIG.kill_switches.disable_lights=document.getElementById('ks_lights').checked;
+   CONFIG.kill_switches.disable_audio=document.getElementById('ks_audio').checked;
+   await pushConfig();
+ });
+});
+
+// recordings
+async function loadRecordings(){
+ let r=await api('/api/recordings');
+ let j=await r.json();
+ if(!r.ok) return;
+ let div=document.getElementById('recList');
+ if(j.recordings.length===0) div.innerHTML='<p class="muted">No recordings</p>';
+ else {
+   let h='<table><tr><th>Name</th><th>Size</th><th>Preview</th><th>Actions</th></tr>';
+   for(let rec of j.recordings){
+     h+=`<tr><td>${rec.name}</td><td>${(rec.size/1024).toFixed(1)} KB</td>
+       <td><audio controls src="/api/recordings/${encodeURIComponent(rec.name)}"></audio></td>
+       <td><button class="secondary" onclick="renameRec('${rec.name}')">Rename</button>
+           <button class="danger" onclick="deleteRec('${rec.name}')">Delete</button></td></tr>`;
+   }
+   h+='</table>';
+   div.innerHTML=h;
+ }
+}
+async function renameRec(oldName){
+ let n=prompt('New name (alphanumeric . _ -):', oldName);
+ if(!n) return;
+ n=n.trim();
+ if(!/^[A-Za-z0-9._\-]+$/.test(n) || n.startsWith(".") || n.includes("..") || n.includes("/") || n.includes("\\")){ alert('Invalid name'); return; }
+ let r=await api(`/api/recordings/${encodeURIComponent(oldName)}/rename`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({newName:n})});
+ let j=await r.json();
+ if(!r.ok) alert(j.error); else { toast('Renamed'); loadRecordings(); }
+}
+async function deleteRec(name){
+ if(!confirm(`Delete ${name}?`)) return;
+ let r=await api(`/api/recordings/${encodeURIComponent(name)}`,{method:'DELETE'});
+ let j=await r.json();
+ if(!r.ok) alert(j.error); else { toast('Deleted'); loadRecordings(); }
+}
+
+// Recording via MediaRecorder
+async function toggleRecord(){
+ let btn=document.getElementById('recBtn');
+ if(_recorder && _recorder.state==='recording'){
+   _recorder.stop();
+   btn.textContent='● Start Recording';
+   btn.style.background='#2a7';
+   return;
+ }
+ try{
+   _stream=await navigator.mediaDevices.getUserMedia({audio:true});
+ } catch(e){ document.getElementById('recErr').textContent='Microphone access denied: '+e.message; return; }
+ _chunks=[];
+ _recorder=new MediaRecorder(_stream);
+ _recorder.ondataavailable=e=>{ if(e.data.size>0) _chunks.push(e.data); };
+ _recorder.onstop=()=>{
+   _blob=new Blob(_chunks,{type:'audio/wav'});
+   // For preview, use blob URL; MediaRecorder may give webm, but we save as wav (browser will produce webm/opus; server saves as .wav regardless)
+   // Try to show preview
+   let url=URL.createObjectURL(_blob);
+   let a=document.getElementById('preview');
+   a.src=url; a.style.display='block';
+   document.getElementById('uploadBtn').disabled=false;
+   document.getElementById('recMsg').textContent='Preview ready. Click Save to upload.';
+   _stream.getTracks().forEach(t=>t.stop());
+ };
+ _recorder.start();
+ btn.textContent='■ Stop Recording';
+ btn.style.background='#c33';
+ document.getElementById('recErr').textContent='';
+}
+
+function clearRecording(){
+ _blob=null; _chunks=[];
+ document.getElementById('preview').style.display='none';
+ document.getElementById('preview').src='';
+ document.getElementById('uploadBtn').disabled=true;
+ document.getElementById('recMsg').textContent='';
+}
+
+async function uploadRecording(){
+ let name=document.getElementById('recName').value.trim();
+ if(name.toLowerCase().endsWith(".wav")) name=name.slice(0,-4);
+ if(!name){ document.getElementById('recErr').textContent='Name required'; return; }
+ if(!/^[A-Za-z0-9._\-]+$/.test(name) || name.startsWith(".") || name.includes("..") || name.includes("/") || name.includes("\\")){ document.getElementById('recErr').textContent='Invalid name (alphanumeric . _ -)'; return; }
+ if(!_blob){ document.getElementById('recErr').textContent='Record something first'; return; }
+ document.getElementById('recErr').textContent='';
+ // Convert blob to base64
+ let reader=new FileReader();
+ reader.onloadend=async ()=>{
+   let dataUrl=reader.result; // data:audio/webm;base64,...
+   let base64=dataUrl.split(',')[1];
+   let r=await api('/api/recordings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, data:base64})});
+   let j=await r.json();
+   if(!r.ok){ document.getElementById('recErr').textContent=j.error; }
+   else { toast('Recording saved'); clearRecording(); document.getElementById('recName').value=''; loadRecordings(); }
+ };
+ reader.readAsDataURL(_blob);
+}
+
+function logout(){ fetch('/api/logout',{method:'POST'}).then(()=>location.href='/login'); }
+
+// SSE for live updates
+function connectSSE(){
+ let token = null; // cookie handles auth, but also try token from cookie not needed
+ let es=new EventSource('/api/events');
+ es.onopen=()=>{ document.getElementById('conn').textContent='connected'; document.getElementById('conn').style.background='#2a7'; document.getElementById('conn').style.color='#fff'; };
+ es.onerror=()=>{ document.getElementById('conn').textContent='disconnected'; document.getElementById('conn').style.background='#c33'; };
+ es.onmessage=e=>{
+   try{
+     let data=JSON.parse(e.data);
+     if(data.hash && data.hash!==HASH){
+       // Preserve drafts: don't wipe pendingBlocks
+       CONFIG=data.config; HASH=data.hash;
+       toast('Config updated from server',2000);
+       renderAll();
+       loadRecordings();
+     }
+   }catch(_){}
+ };
+}
+
+// init
+loadConfig().then(()=>{ loadRecordings(); connectSSE(); }).catch(e=>{ console.error(e); });
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alarm Clock - Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:system-ui,sans-serif;max-width:400px;margin:80px auto;padding:20px}
+input,button{width:100%;padding:10px;margin:6px 0;box-sizing:border-box}
+button{background:#2a7;color:#fff;border:none;cursor:pointer;border-radius:6px}
+.error{color:#c00}
+</style>
+</head>
+<body>
+<h2>Alarm Clock Admin</h2>
+<p>Enter password to continue</p>
+<form id="loginForm">
+<input type="password" id="password" placeholder="Password" required autofocus>
+<button type="submit">Login</button>
+<p id="msg" class="error"></p>
+</form>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async e=>{
+ e.preventDefault();
+ const pw=document.getElementById('password').value;
+ const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+ const j=await r.json();
+ if(r.ok){ location.href='/'; } else { document.getElementById('msg').textContent=j.error||'Login failed'; }
+});
+</script>
+</body>
+</html>

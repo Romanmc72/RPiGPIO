@@ -259,10 +259,41 @@ def get_current_slot(now, rules):
     return None, None
 
 
+def prune_stale_date_overrides(config):
+    """Remove date_overrides entries that are 2 or more days old to avoid unbounded growth."""
+    overrides = config.get("date_overrides")
+    if not overrides:
+        return False
+    tz = ZoneInfo(config.get("timezone", "America/Chicago"))
+    now_date = datetime.now(tz).date()
+    stale_keys = []
+    for key in list(overrides.keys()):
+        try:
+            d = datetime.strptime(key, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        # 1 day old is OK, 2+ days old (strictly before yesterday) should be removed
+        delta = (now_date - d).days
+        if delta >= 2:
+            stale_keys.append(key)
+    if stale_keys:
+        for k in stale_keys:
+            print(f"Pruning stale date override: {k} (age {(now_date - datetime.strptime(k, '%Y-%m-%d').date()).days}d)")
+            del overrides[k]
+        # Remove empty dict entirely if no overrides remain (optional cleanup)
+        # Keep key as empty dict so save is consistent
+        save_config(config)
+        return True
+    return False
+
+
 def update_system():
     config = load_config()
     if not config:
         return
+
+    # Prune stale date overrides (2+ days old) before any other logic
+    prune_stale_date_overrides(config)
 
     kill = config.get("kill_switches", {})
     if kill.get("disable_all", False):
