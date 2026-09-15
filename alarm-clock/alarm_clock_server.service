@@ -3,7 +3,7 @@ Description=The server that manages the alarm clock config
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/RPiGPIO/server.py
+ExecStart=/usr/bin/python3 /home/pi/RPiGPIO/alarm-clock/server.py
 WorkingDirectory=/home/pi/RPiGPIO
 StandardOutput=inherit
 StandardError=inherit
