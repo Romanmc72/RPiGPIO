@@ -1,0 +1,14 @@
+[Unit]
+Description=The server that manages the alarm clock config
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/RPiGPIO/server.py
+WorkingDirectory=/home/pi/RPiGPIO
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=pi
+
+[Install]
+WantedBy=multi-user.target

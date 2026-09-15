@@ -8,6 +8,22 @@ Features:
  - Watches schedule.json for external changes and pushes via SSE
  - Handles write conflicts via lightweight file hash (daemon wins)
  - Validates schedule rules and recordings management
+
+Service Definition
+------------------
+The service definition is set up in the alarm_clock_server.service file.
+
+place that file at:
+
+`/etc/systemd/system/alarm_clock_server.service`
+
+then run these commands to enable and start the service and to ensure it starts up on reboot:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable alarm_clock_server.service
+sudo systemctl start alarm_clock_server.service
+```
 """
 import os
 import re
