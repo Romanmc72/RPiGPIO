@@ -7,6 +7,7 @@ set -euo pipefail
 main() {
   sudo systemctl daemon-reload
   sudo systemctl restart led_schedule.service
+  sudo systemctl restart alarm_clock_server.service
 }
 
 main
