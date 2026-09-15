@@ -37,6 +37,7 @@ import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from datetime import datetime, date
+from typing import Optional, Tuple, Dict
 from zoneinfo import ZoneInfo
 
 # ---------------------------------------------------------------------------
@@ -71,7 +72,7 @@ file_hash_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
-def get_password_hash() -> str | None:
+def get_password_hash() -> Optional[str]:
     for k in PASSWORD_HASH_ENV_VARS:
         v = os.environ.get(k)
         if v:
@@ -96,7 +97,7 @@ def get_password_hash() -> str | None:
             return vv
     return None
 
-def get_password_hash_source() -> str | None:
+def get_password_hash_source() -> Optional[str]:
     for k in PASSWORD_HASH_ENV_VARS:
         if os.environ.get(k):
             return k
@@ -137,7 +138,7 @@ def create_session() -> str:
         SESSIONS[token] = time.time() + SESSION_TTL
     return token
 
-def is_valid_token(token: str | None) -> bool:
+def is_valid_token(token: Optional[str]) -> bool:
     if not token:
         return False
     with SESSION_LOCK:
@@ -148,7 +149,7 @@ def is_valid_token(token: str | None) -> bool:
             del SESSIONS[token]
     return False
 
-def extract_token(handler: BaseHTTPRequestHandler) -> str | None:
+def extract_token(handler: BaseHTTPRequestHandler) -> Optional[str]:
     # Cookie
     cookie = handler.headers.get("Cookie", "")
     for part in cookie.split(";"):
@@ -180,7 +181,7 @@ def require_auth(handler: BaseHTTPRequestHandler) -> bool:
 def compute_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
-def read_config_file() -> tuple[dict | None, str, bytes]:
+def read_config_file() -> Tuple[Optional[Dict], str, bytes]:
     try:
         raw = CONFIG_PATH.read_bytes()
         h = compute_hash(raw)
