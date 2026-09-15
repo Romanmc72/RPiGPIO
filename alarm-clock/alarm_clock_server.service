@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 ExecStart=/usr/bin/python3 /home/pi/RPiGPIO/alarm-clock/server.py
-WorkingDirectory=/home/pi/RPiGPIO
+WorkingDirectory=/home/pi/RPiGPIO/alarm-clock
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
