@@ -25,6 +25,8 @@ sudo systemctl enable alarm_clock_server.service
 sudo systemctl start alarm_clock_server.service
 ```
 """
+from __future__ import annotations
+
 import os
 import re
 import json
@@ -406,7 +408,7 @@ def _generate_self_signed_cert(cert_path: Path, key_path: Path) -> bool:
     return _generate_self_signed_cert_openssl(cert_path, key_path)
 
 
-def ensure_tls_cert() -> tuple[Path | None, Path | None]:
+def ensure_tls_cert() -> Tuple[Optional[Path], Optional[Path]]:
     """Ensure a self-signed cert/key exist and are not near expiry.
 
     Returns (cert_path, key_path) if TLS should be used, else (None, None).
