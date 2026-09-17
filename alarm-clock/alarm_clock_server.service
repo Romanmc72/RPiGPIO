@@ -1,6 +1,11 @@
 [Unit]
 Description=The server that manages the alarm clock config
 After=network.target
+Wants=network-online.target avahi-daemon.service
+# Requires HTTPS cert; server auto-generates a self-signed cert on first start
+# and auto-renews when <30 days from expiry (checked hourly + on startup).
+# To force plain HTTP (not recommended — Safari mic requires HTTPS), set
+# ALARM_TLS_DISABLE=1
 
 [Service]
 ExecStart=/usr/bin/python3 /home/pi/RPiGPIO/alarm-clock/server.py
@@ -10,7 +15,8 @@ StandardError=inherit
 Restart=always
 User=pi
 Environment="ALARM_ADMIN_PASSWORD_HASH=<FILL THIS IN BEFORE STARTING!!!>"
-Environment="ALARM_PORT=80"
+Environment="ALARM_PORT=443"
+Environment="ALARM_CERT_DIR=/etc/alarmclock/certs"
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 [Install]

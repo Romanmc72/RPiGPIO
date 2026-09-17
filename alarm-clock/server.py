@@ -56,6 +56,24 @@ PASSWORD_HASH_ENV_VARS = ["ALARM_ADMIN_PASSWORD_HASH", "ADMIN_PASSWORD_HASH", "P
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# ---------------------------------------------------------------------------
+# TLS / self-signed cert config
+# ---------------------------------------------------------------------------
+# Env vars:
+#   ALARM_TLS_DISABLE / ALARM_DISABLE_TLS / DISABLE_TLS = "1" to force plain HTTP
+#   ALARM_TLS_CERT / ALARM_CERT_FILE -> path to cert PEM
+#   ALARM_TLS_KEY  / ALARM_KEY_FILE  -> path to key PEM
+#   ALARM_CERT_DIR / ALARM_TLS_CERT_DIR -> directory holding server.crt/server.key
+#   ALARM_TLS_RENEW_DAYS -> days before expiry to auto-renew (default 30)
+#   ALARM_TLS_VALID_DAYS -> validity period for generated cert (default 825)
+TLS_DISABLE = os.environ.get("ALARM_TLS_DISABLE", os.environ.get("ALARM_DISABLE_TLS", os.environ.get("DISABLE_TLS", ""))).strip().lower() in ("1", "true", "yes")
+TLS_CERT_ENV_VARS = ["ALARM_TLS_CERT", "ALARM_CERT_FILE", "TLS_CERT", "SSL_CERT"]
+TLS_KEY_ENV_VARS = ["ALARM_TLS_KEY", "ALARM_KEY_FILE", "TLS_KEY", "SSL_KEY"]
+TLS_CERT_DIR_ENV_VARS = ["ALARM_CERT_DIR", "ALARM_TLS_CERT_DIR", "CERT_DIR"]
+DEFAULT_CERT_DIR = Path(__file__).parent / "certs"
+TLS_RENEW_DAYS = int(os.environ.get("ALARM_TLS_RENEW_DAYS", "30"))
+TLS_VALID_DAYS = int(os.environ.get("ALARM_TLS_VALID_DAYS", "300"))
+
 # Sessions: token -> expiry
 SESSIONS: dict[str, float] = {}
 SESSION_LOCK = threading.Lock()
@@ -68,6 +86,383 @@ SSE_LOCK = threading.Lock()
 # File hash tracking
 file_hash: str = ""
 file_hash_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# TLS helpers — self-signed cert with auto-renew
+# ---------------------------------------------------------------------------
+def _get_cert_paths() -> tuple[Path, Path]:
+    """Resolve cert/key paths from env or defaults."""
+    cert_path = None
+    key_path = None
+    for k in TLS_CERT_ENV_VARS:
+        v = os.environ.get(k)
+        if v:
+            cert_path = Path(v.strip())
+            break
+    for k in TLS_KEY_ENV_VARS:
+        v = os.environ.get(k)
+        if v:
+            key_path = Path(v.strip())
+            break
+    if cert_path and not key_path:
+        # derive key alongside cert
+        key_path = cert_path.with_suffix(".key")
+    if key_path and not cert_path:
+        cert_path = key_path.with_suffix(".crt")
+    if not cert_path or not key_path:
+        cert_dir = None
+        for k in TLS_CERT_DIR_ENV_VARS:
+            v = os.environ.get(k)
+            if v:
+                cert_dir = Path(v.strip())
+                break
+        if not cert_dir:
+            cert_dir = DEFAULT_CERT_DIR
+        if not cert_path:
+            cert_path = cert_dir / "server.crt"
+        if not key_path:
+            key_path = cert_dir / "server.key"
+    return cert_path, key_path
+
+
+def _get_local_ips() -> list[str]:
+    ips: set[str] = set()
+    # Try routing trick
+    try:
+        import socket as _sock
+
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if not ip.startswith("127."):
+                ips.add(ip)
+        finally:
+            s.close()
+    except Exception:
+        pass
+    # Enumerate via ip addr if available
+    try:
+        import subprocess
+        import re as _re
+
+        out = subprocess.check_output(["ip", "-4", "addr", "show"], text=True, timeout=3)
+        for m in _re.finditer(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out):
+            ip = m.group(1)
+            if not ip.startswith("127."):
+                ips.add(ip)
+    except Exception:
+        pass
+    try:
+        import socket as _sock
+
+        for fam, _, _, _, sockaddr in _sock.getaddrinfo(_sock.gethostname(), None):
+            if fam == _sock.AF_INET:
+                ip = sockaddr[0]
+                if not ip.startswith("127."):
+                    ips.add(ip)
+    except Exception:
+        pass
+    return sorted(ips)
+
+
+def _get_sans() -> tuple[list[str], list[str]]:
+    """Return (dns_names, ip_strings) for SAN."""
+    import socket as _sock
+
+    dns: set[str] = {"localhost", "alarmclock", "alarmclock.local"}
+    try:
+        hn = _sock.gethostname().strip()
+        if hn:
+            dns.add(hn)
+            if not hn.endswith(".local"):
+                dns.add(hn + ".local")
+    except Exception:
+        pass
+    # Also add FQDN
+    try:
+        fqdn = _sock.getfqdn().strip()
+        if fqdn and fqdn != "localhost":
+            dns.add(fqdn)
+    except Exception:
+        pass
+    ips = ["127.0.0.1", "::1"] + _get_local_ips()
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    uniq_ips: list[str] = []
+    for ip in ips:
+        if ip not in seen:
+            seen.add(ip)
+            uniq_ips.append(ip)
+    return sorted(dns), uniq_ips
+
+
+def _cert_expiry_datetime(cert_path: Path):
+    """Return not_valid_after as aware datetime, or None if unreadable."""
+    try:
+        from cryptography import x509 as _x509
+
+        data = cert_path.read_bytes()
+        cert = _x509.load_pem_x509_certificate(data)
+        # cryptography >=42 uses not_valid_after_utc
+        dt = getattr(cert, "not_valid_after_utc", None)
+        if dt is None:
+            dt = cert.not_valid_after  # type: ignore
+            # naive -> assume UTC
+            from datetime import timezone as _tz
+
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_tz.utc)
+        return dt
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # Fallback: openssl
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            ["openssl", "x509", "-enddate", "-noout", "-in", str(cert_path)], text=True, timeout=5
+        )
+        # out: notAfter=Sep 17 12:00:00 2027 GMT
+        val = out.strip().split("=", 1)[-1].strip()
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b  %d %H:%M:%S %Y %Z"):
+            try:
+                parsed = _dt.strptime(val, fmt)
+                return parsed.replace(tzinfo=_tz.utc)
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _cert_needs_renewal(cert_path: Path, key_path: Path) -> bool:
+    if not cert_path.exists() or not key_path.exists():
+        return True
+    # Check key/cert match by verifying openssl can read them together (light check)
+    # Check expiry
+    exp = _cert_expiry_datetime(cert_path)
+    if exp is None:
+        # If unreadable, force renewal
+        return True
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    now = _dt.now(_tz.utc)
+    remaining = exp - now
+    if remaining.total_seconds() <= TLS_RENEW_DAYS * 86400:
+        return True
+    # Also check that SAN still covers current IPs/hosts — if IPs changed, renew
+    # Light heuristic: if local IPs not all in cert SAN, we should renew.
+    # We skip strict check to avoid churn; only renew on expiry/missing.
+    return False
+
+
+def _generate_self_signed_cert_openssl(cert_path: Path, key_path: Path) -> bool:
+    dns_names, ip_strs = _get_sans()
+    # Build SAN string: DNS:foo,IP:1.2.3.4
+    san_parts = [f"DNS:{d}" for d in dns_names] + [f"IP:{ip}" for ip in ip_strs]
+    san = ",".join(san_parts)
+    # Use openssl req with addext (OpenSSL >=1.1.1)
+    import subprocess
+    import tempfile
+
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    # Generate key + cert in one go
+    cfg = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".cnf")
+    try:
+        cfg.write("[req]\n")
+        cfg.write("distinguished_name=req_distinguished_name\n")
+        cfg.write("x509_extensions=v3_req\n")
+        cfg.write("prompt=no\n")
+        cfg.write("[req_distinguished_name]\n")
+        cfg.write("CN=alarmclock.local\n")
+        cfg.write("[v3_req]\n")
+        cfg.write("subjectAltName=" + san + "\n")
+        cfg.write("basicConstraints=CA:FALSE\n")
+        cfg.write("keyUsage=digitalSignature,keyEncipherment\n")
+        cfg.write("extendedKeyUsage=serverAuth\n")
+        cfg.flush()
+        cfg.close()
+        cmd = [
+            "openssl",
+            "req",
+            "-x509",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key_path),
+            "-out",
+            str(cert_path),
+            "-days",
+            str(TLS_VALID_DAYS),
+            "-config",
+            cfg.name,
+            "-extensions",
+            "v3_req",
+        ]
+        subprocess.check_call(cmd, timeout=30)
+        # Restrict key perms
+        try:
+            os.chmod(key_path, 0o600)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[tls] openssl generation failed: {e}")
+        return False
+    finally:
+        try:
+            os.unlink(cfg.name)
+        except Exception:
+            pass
+
+
+def _generate_self_signed_cert_cryptography(cert_path: Path, key_path: Path) -> bool:
+    try:
+        from cryptography import x509 as _x509
+        from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import ipaddress
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+        from datetime import timedelta as _td
+    except ImportError:
+        return False
+    try:
+        dns_names, ip_strs = _get_sans()
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = _x509.Name([_x509.NameAttribute(NameOID.COMMON_NAME, "alarmclock.local")])
+        now = _dt.now(_tz.utc)
+        builder = (
+            _x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(_x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + _td(days=TLS_VALID_DAYS))
+            .add_extension(_x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                _x509.KeyUsage(
+                    digital_signature=True,
+                    content_commitment=False,
+                    key_encipherment=True,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                _x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+                critical=False,
+            )
+        )
+        sans: list = []
+        for d in dns_names:
+            sans.append(_x509.DNSName(d))
+        for ip in ip_strs:
+            try:
+                sans.append(_x509.IPAddress(ipaddress.ip_address(ip)))
+            except ValueError:
+                continue
+        builder = builder.add_extension(_x509.SubjectAlternativeName(sans), critical=False)
+        cert = builder.sign(private_key=key, algorithm=hashes.SHA256())
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            )
+        )
+        try:
+            os.chmod(key_path, 0o600)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[tls] cryptography generation failed: {e}")
+        return False
+
+
+def _generate_self_signed_cert(cert_path: Path, key_path: Path) -> bool:
+    # Prefer cryptography (no external binary, works on minimal images)
+    if _generate_self_signed_cert_cryptography(cert_path, key_path):
+        return True
+    # Fallback to openssl CLI
+    return _generate_self_signed_cert_openssl(cert_path, key_path)
+
+
+def ensure_tls_cert() -> tuple[Path | None, Path | None]:
+    """Ensure a self-signed cert/key exist and are not near expiry.
+
+    Returns (cert_path, key_path) if TLS should be used, else (None, None).
+    Auto-generates/renews when needed — this is the 'auto-renew' mechanism.
+    Renewal also happens dynamically via a background thread (see start).
+    """
+    if TLS_DISABLE:
+        print("[tls] TLS disabled via env (ALARM_TLS_DISABLE)")
+        return None, None
+    cert_path, key_path = _get_cert_paths()
+    try:
+        if _cert_needs_renewal(cert_path, key_path):
+            reason = "missing" if not cert_path.exists() or not key_path.exists() else "expiring/renew"
+            print(f"[tls] Generating self-signed cert ({reason}) -> {cert_path}")
+            ok = _generate_self_signed_cert(cert_path, key_path)
+            if not ok:
+                print("[tls] Failed to generate cert — falling back to plain HTTP")
+                return None, None
+            exp = _cert_expiry_datetime(cert_path)
+            if exp:
+                print(f"[tls] New cert valid until {exp.isoformat()} SAN will cover local IPs")
+        else:
+            exp = _cert_expiry_datetime(cert_path)
+            if exp:
+                print(f"[tls] Existing cert valid until {exp.isoformat()} — {cert_path}")
+    except Exception as e:
+        print(f"[tls] ensure_tls_cert error: {e} — falling back to HTTP")
+        return None, None
+    # Final sanity: both files exist and are readable
+    if not cert_path.exists() or not key_path.exists():
+        return None, None
+    return cert_path, key_path
+
+
+def _tls_renewal_loop(cert_path: Path, key_path: Path, check_interval: float = 3600.0):
+    """Background thread: periodically check expiry and renew in place.
+
+    The running server keeps using the old cert until next restart (Python
+    ssl context is loaded at startup). Renewal here ensures the cert on disk
+    is fresh so the next (re)start — whether manual, systemd restart, or
+    reboot — picks it up. For long uptimes, we log that a restart is needed.
+    """
+    while True:
+        try:
+            time.sleep(check_interval)
+            if _cert_needs_renewal(cert_path, key_path):
+                print("[tls] Background renewal: cert near expiry, regenerating...")
+                ok = _generate_self_signed_cert(cert_path, key_path)
+                if ok:
+                    exp = _cert_expiry_datetime(cert_path)
+                    print(f"[tls] Background renewal done; new expiry {exp}; restart to apply")
+                else:
+                    print("[tls] Background renewal failed")
+        except Exception as e:
+            print(f"[tls] renewal loop error: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Auth helpers
@@ -243,6 +638,73 @@ def recording_path(audio_dir: Path, name: str) -> Path:
     # After stripping .wav, validate again (caller should have validated)
     safe = Path(base).name  # extra safety, though base already basename
     return audio_dir / f"{safe}.wav"
+
+
+def _ensure_wav_bytes(data: bytes) -> tuple[bytes, bool]:
+    """Ensure *data* is a PCM WAV playable by ``aplay``.
+
+    The browser previously used ``MediaRecorder`` which emits ``webm/opus``
+    or ``mp4/aac`` but saved the blob as ``.wav`` verbatim - the result is
+    static/noise on the Pi.  We now generate true PCM WAV on the client via
+    Web Audio (see ``static/index.html``), but keep this server-side safety
+    net so old clients, Safari MediaRecorder fallback, or curl uploads still
+    produce a valid WAV.
+
+    Returns ``(wav_bytes, was_converted)``.  If ``data`` already looks like
+    ``RIFF/WAVE`` it is returned unchanged; otherwise we try to transcode via
+    ``ffmpeg`` (``-acodec pcm_s16le``).  If ffmpeg is unavailable or fails we
+    return the original bytes and let the handler decide (it will reject with
+    a helpful error instead of saving static).
+    """
+    if data.startswith(b"RIFF") and b"WAVE" in data[:16]:
+        return data, False
+    # Light sniff: webm starts with 0x1A45DFA3, mp4/ftyp, ogg, etc. - all need transcode
+    import shutil
+    import subprocess
+    import tempfile
+
+    if not shutil.which("ffmpeg"):
+        return data, False
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".in") as fin:
+            fin.write(data)
+            fin.flush()
+            in_path = fin.name
+        out_fd, out_path = tempfile.mkstemp(suffix=".wav")
+        os.close(out_fd)
+        # Normalise to 16-bit PCM WAV that aplay understands.
+        # Keep original sample-rate/channels when possible; force pcm_s16le.
+        # Using -y to overwrite, -loglevel error to keep output quiet.
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            in_path,
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            out_path,
+        ]
+        subprocess.run(cmd, check=True, timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        wav = Path(out_path).read_bytes()
+        if wav.startswith(b"RIFF"):
+            return wav, True
+        return data, False
+    except Exception as e:
+        print(f"[audio] ffmpeg transcode failed: {e}")
+        return data, False
+    finally:
+        for p in (locals().get("in_path"), locals().get("out_path")):
+            if p:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -587,6 +1049,22 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_file("index.html")
             return
 
+        # Cert download — allow clients to fetch self-signed cert to trust (no auth needed)
+        if path in ("/cert", "/cert.pem", "/server.crt", "/ca.crt", "/static/server.crt"):
+            try:
+                cert_path, _ = _get_cert_paths()
+                if cert_path.exists():
+                    data = cert_path.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-x509-ca-cert")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Content-Disposition", 'attachment; filename="alarmclock.crt"')
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+            except Exception:
+                pass
+
         # Try static fallback - protect admin page, allow login.html
         if path.startswith("/"):
             rel = path.lstrip("/")
@@ -683,7 +1161,13 @@ class Handler(BaseHTTPRequestHandler):
                         if dest.exists():
                             self.send_json({"error": "recording name must be unique"}, 409)
                             return
-                        dest.write_bytes(data)
+                        wav, converted = _ensure_wav_bytes(data)
+                        if not wav.startswith(b"RIFF"):
+                            self.send_json({"error": "invalid audio: not a WAV and ffmpeg conversion failed (install ffmpeg or re-record)"}, 400)
+                            return
+                        if converted:
+                            print(f"[audio] multipart '{rec_name}' transcoded to WAV via ffmpeg")
+                        dest.write_bytes(wav)
                         self.send_json({"ok": True, "name": rec_name})
                         found = True
                         break
@@ -715,11 +1199,13 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         self.send_json({"error": "invalid base64"}, 400)
                         return
-                    # Basic WAV check: starts with RIFF
-                    if not data.startswith(b"RIFF"):
-                        # still allow but warn
-                        pass
-                    dest.write_bytes(data)
+                    wav, converted = _ensure_wav_bytes(data)
+                    if not wav.startswith(b"RIFF"):
+                        self.send_json({"error": "invalid audio: not a WAV and ffmpeg conversion failed (install ffmpeg or re-record)"}, 400)
+                        return
+                    if converted:
+                        print(f"[audio] '{rec_name}' transcoded to WAV via ffmpeg")
+                    dest.write_bytes(wav)
                     self.send_json({"ok": True, "name": rec_name})
                     return
                 # Also handle raw bytes with ?name= query
@@ -735,7 +1221,11 @@ class Handler(BaseHTTPRequestHandler):
                     if dest.exists():
                         self.send_json({"error": "unique name required"}, 409)
                         return
-                    dest.write_bytes(body)
+                    wav, converted = _ensure_wav_bytes(body)
+                    if not wav.startswith(b"RIFF"):
+                        self.send_json({"error": "invalid audio: not a WAV and ffmpeg conversion failed"}, 400)
+                        return
+                    dest.write_bytes(wav)
                     self.send_json({"ok": True})
                     return
                 self.send_json({"error": "invalid request: provide multipart file or JSON {name, data}"}, 400)
@@ -882,9 +1372,37 @@ def main():
     else:
         src = get_password_hash_source() or "UNKNOWN"
         print(f"Auth enabled via {src}")
-    print(f"Serving on {HOST}:{PORT}  config={CONFIG_PATH}  static={STATIC_DIR}")
+
+    # TLS: ensure self-signed cert (auto-renew on startup + background thread)
+    tls_cert, tls_key = ensure_tls_cert()
+    use_tls = tls_cert is not None and tls_key is not None
+
+    scheme = "https" if use_tls else "http"
+    print(f"Serving on {scheme}://{HOST}:{PORT}  config={CONFIG_PATH}  static={STATIC_DIR}")
+    if use_tls:
+        print(f"[tls] cert={tls_cert} key={tls_key}")
+        print(f"[tls] iOS: open https://alarmclock.local:{PORT}/ (or https://<pi-ip>:{PORT}/) and trust cert if prompted;")
+        print(f"[tls]      microphone (getUserMedia) requires HTTPS — self-signed is sufficient once trusted.")
+        print(f"[tls]      To trust on iOS: visit the URL, tap 'Show Details' -> 'visit site', or install cert from https://<pi-ip>:{PORT}/static/server.crt if exposed")
+        # Start background renewal thread (checks hourly)
+        rt = threading.Thread(target=_tls_renewal_loop, args=(tls_cert, tls_key), daemon=True)
+        rt.start()
+    else:
+        print("[tls] Serving plain HTTP — Safari getUserMedia will be blocked (requires HTTPS)")
+
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
+    if use_tls:
+        import ssl
+
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # Harden: require TLS 1.2+, auto-select ciphers
+        try:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2  # type: ignore[attr-defined]
+        except Exception:
+            ctx.options |= getattr(ssl, "OP_NO_TLSv1", 0) | getattr(ssl, "OP_NO_TLSv1_1", 0)
+        ctx.load_cert_chain(certfile=str(tls_cert), keyfile=str(tls_key))
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

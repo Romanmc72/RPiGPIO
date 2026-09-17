@@ -84,6 +84,7 @@ let CONFIG=null;
 let HASH=null;
 let pendingBlocks={}; // preserve unsaved block drafts keyed by schedule id
 let _recorder=null, _chunks=[], _blob=null, _stream=null;
+let _audioCtx=null, _procNode=null, _micNode=null, _wavBuffers=[], _wavSampleRate=44100;
 
 function toast(msg, ms=3000){
  const s=document.getElementById('status');
@@ -383,31 +384,128 @@ async function deleteRec(name){
  if(!r.ok) alert(j.error); else { toast('Deleted'); loadRecordings(); }
 }
 
-// Recording via MediaRecorder
+// Recording via Web Audio → true PCM WAV (fixes "static" bug: MediaRecorder
+// produces webm/opus or mp4/aac which saved as .wav is unplayable by aplay)
+function _floatTo16BitPCM(view, offset, input){
+ for(let i=0;i<input.length;i++, offset+=2){
+   let s=Math.max(-1, Math.min(1, input[i]));
+   view.setInt16(offset, s<0 ? s*0x8000 : s*0x7FFF, true);
+ }
+}
+function _encodeWAV(samples, sampleRate){
+ const numChannels=1;
+ const bitsPerSample=16;
+ const bytesPerSample=bitsPerSample/8;
+ const blockAlign=numChannels*bytesPerSample;
+ const byteRate=sampleRate*blockAlign;
+ const dataSize=samples.length*bytesPerSample;
+ const buf=new ArrayBuffer(44+dataSize);
+ const view=new DataView(buf);
+ const writeStr=(off,str)=>{ for(let i=0;i<str.length;i++) view.setUint8(off+i, str.charCodeAt(i)); };
+ writeStr(0,'RIFF');
+ view.setUint32(4,36+dataSize,true);
+ writeStr(8,'WAVE');
+ writeStr(12,'fmt ');
+ view.setUint32(16,16,true); // PCM chunk size
+ view.setUint16(20,1,true);  // PCM format
+ view.setUint16(22,numChannels,true);
+ view.setUint32(24,sampleRate,true);
+ view.setUint32(28,byteRate,true);
+ view.setUint16(32,blockAlign,true);
+ view.setUint16(34,bitsPerSample,true);
+ writeStr(36,'data');
+ view.setUint32(40,dataSize,true);
+ _floatTo16BitPCM(view,44,samples);
+ return new Blob([view],{type:'audio/wav'});
+}
+function _mergeBuffers(buffers, totalLen){
+ const out=new Float32Array(totalLen);
+ let off=0;
+ for(let b of buffers){ out.set(b, off); off+=b.length; }
+ return out;
+}
 async function toggleRecord(){
  let btn=document.getElementById('recBtn');
+ // stop if already recording (PCM path)
+ if(_procNode){
+   try{ _procNode.disconnect(); }catch(_){}
+   try{ _micNode.disconnect(); }catch(_){}
+   _procNode.onaudioprocess=null;
+   // merge + encode
+   let total=0; for(let b of _wavBuffers) total+=b.length;
+   let merged=_mergeBuffers(_wavBuffers, total);
+   _blob=_encodeWAV(merged, _wavSampleRate);
+   let url=URL.createObjectURL(_blob);
+   let a=document.getElementById('preview');
+   a.src=url; a.style.display='block';
+   document.getElementById('uploadBtn').disabled=false;
+   document.getElementById('recMsg').textContent='Preview ready ('+(_blob.size/1024).toFixed(1)+' KB, '+Math.round(total/_wavSampleRate*10)/10+'s). Click Save to upload.';
+   _wavBuffers=[];
+   _procNode=null; _micNode=null;
+   if(_audioCtx){ try{ await _audioCtx.close(); }catch(_){} _audioCtx=null; }
+   if(_stream){ _stream.getTracks().forEach(t=>t.stop()); _stream=null; }
+   // also stop MediaRecorder fallback if active
+   if(_recorder && _recorder.state==='recording'){ try{ _recorder.stop(); }catch(_){} _recorder=null; _chunks=[]; }
+   btn.textContent='● Start Recording';
+   btn.style.background='#2a7';
+   return;
+ }
  if(_recorder && _recorder.state==='recording'){
    _recorder.stop();
    btn.textContent='● Start Recording';
    btn.style.background='#2a7';
    return;
  }
+ // start — prefer Web Audio PCM WAV
  try{
    _stream=await navigator.mediaDevices.getUserMedia({audio:true});
  } catch(e){ document.getElementById('recErr').textContent='Microphone access denied: '+e.message; return; }
+ // Try PCM path via AudioContext
+ try{
+   const AC=window.AudioContext||window.webkitAudioContext;
+   _audioCtx=new AC({sampleRate:44100});
+   if(_audioCtx.state==='suspended') await _audioCtx.resume();
+   _wavSampleRate=_audioCtx.sampleRate;
+   _wavBuffers=[];
+   _micNode=_audioCtx.createMediaStreamSource(_stream);
+   // ScriptProcessor is deprecated but widely supported and simplest for mono WAV
+   _procNode=_audioCtx.createScriptProcessor(4096,1,1);
+   _procNode.onaudioprocess=e=>{
+     const ch=e.inputBuffer.getChannelData(0);
+     _wavBuffers.push(new Float32Array(ch));
+   };
+   _micNode.connect(_procNode);
+   _procNode.connect(_audioCtx.destination);
+   btn.textContent='■ Stop Recording';
+   btn.style.background='#c33';
+   document.getElementById('recErr').textContent='';
+   return;
+ } catch(e){
+   // Fallback to MediaRecorder (will be converted server-side via ffmpeg if needed)
+   console.warn('PCM recording failed, falling back to MediaRecorder', e);
+   try{ if(_audioCtx) await _audioCtx.close(); }catch(_){}
+   _audioCtx=null; _procNode=null; _micNode=null; _wavBuffers=[];
+ }
  _chunks=[];
- _recorder=new MediaRecorder(_stream);
+ try{
+   _recorder=new MediaRecorder(_stream);
+ } catch(e){
+   document.getElementById('recErr').textContent='Recording not supported: '+e.message;
+   _stream.getTracks().forEach(t=>t.stop());
+   _stream=null;
+   return;
+ }
  _recorder.ondataavailable=e=>{ if(e.data.size>0) _chunks.push(e.data); };
  _recorder.onstop=()=>{
-   _blob=new Blob(_chunks,{type:'audio/wav'});
-   // For preview, use blob URL; MediaRecorder may give webm, but we save as wav (browser will produce webm/opus; server saves as .wav regardless)
-   // Try to show preview
+   // For preview, keep original blob; server will transcode non-WAV to WAV via ffmpeg
+   _blob=new Blob(_chunks,{type:_recorder.mimeType||'audio/webm'});
    let url=URL.createObjectURL(_blob);
    let a=document.getElementById('preview');
    a.src=url; a.style.display='block';
    document.getElementById('uploadBtn').disabled=false;
-   document.getElementById('recMsg').textContent='Preview ready. Click Save to upload.';
+   document.getElementById('recMsg').textContent='Preview ready (fallback format). Will be converted to WAV on save.';
    _stream.getTracks().forEach(t=>t.stop());
+   _stream=null;
  };
  _recorder.start();
  btn.textContent='■ Stop Recording';
@@ -417,6 +515,13 @@ async function toggleRecord(){
 
 function clearRecording(){
  _blob=null; _chunks=[];
+ _wavBuffers=[];
+ if(_procNode){ try{ _procNode.disconnect(); }catch(_){} _procNode=null; }
+ if(_micNode){ try{ _micNode.disconnect(); }catch(_){} _micNode=null; }
+ if(_audioCtx){ try{ _audioCtx.close(); }catch(_){} _audioCtx=null; }
+ if(_stream){ _stream.getTracks().forEach(t=>t.stop()); _stream=null; }
+ if(_recorder && _recorder.state==='recording'){ try{ _recorder.stop(); }catch(_){} }
+ _recorder=null;
  document.getElementById('preview').style.display='none';
  document.getElementById('preview').src='';
  document.getElementById('uploadBtn').disabled=true;
